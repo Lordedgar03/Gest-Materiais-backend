@@ -8,6 +8,13 @@ module.exports = {
 		"jest": true,
 		"jasmine": true
 	},
+	"parser": '@babel/eslint-parser',
+	"parserOptions": {
+		"requireConfigFile": false,
+		"babelOptions": {
+			"plugins": ['@babel/plugin-proposal-optional-chaining']
+		}
+	},
 	"extends": "eslint:recommended",
 	"parserOptions": {
 		"sourceType": "module",

@@ -23,6 +23,7 @@ module.exports = async function authMiddleware(ctx, route, req) {
 			tipo: decoded.tipo
 		};
 
+		
 		// ✅ Verifica papéis permitidos para a rota
 		const roles = route && route.opts && route.opts.roles;
 		if (roles && !roles.includes(decoded.tipo)) {
