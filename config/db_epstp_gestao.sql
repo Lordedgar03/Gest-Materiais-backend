@@ -114,20 +114,99 @@ INSERT INTO tb_materiais (mat_nome, mat_descricao, mat_preco, mat_quantidade_est
   ('Impressora HP','Impressora multifuncional',800.00,5,1,2,'Sala 102','SIM'),
   ('Caderno Universitário','Caderno 200 folhas',15.00,50,10,3,'Almoxarifado','SIM'),
   ('Caneta Azul','Caneta esferográfica azul',1.50,200,50,4,'Almoxarifado','SIM');
+/* ------------------------------------------------------
+-- ======================================================================
+-- Tabelas de Requisições (sem preço) + Devolução por item
+-- Compatível com MariaDB. Sem CHECK, sem TRIGGER, sem VIEW.
+-- ======================================================================
+
+/* ------------------------------------------------------
+   1) Cabeçalho da requisição
+   ------------------------------------------------------ */
+DROP TABLE IF EXISTS tb_requisicoes_decisoes;
+DROP TABLE IF EXISTS tb_requisicoes_itens;
+DROP TABLE IF EXISTS tb_requisicoes;
 
 CREATE TABLE tb_requisicoes (
   req_id            INT AUTO_INCREMENT PRIMARY KEY,
-  req_fk_user       INT NOT NULL,
-  req_fk_mat        INT NOT NULL,
-  req_status        ENUM('Pendente','Aprovada','Rejeitada') NOT NULL DEFAULT 'Pendente',
-  req_date          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  req_quantidade    INT NOT NULL DEFAULT 1,
-  req_descricao     VARCHAR(255),
-  req_preco_unitario DECIMAL(10,2),
-  FOREIGN KEY (req_fk_user) REFERENCES tb_users(user_id),
-  FOREIGN KEY (req_fk_mat ) REFERENCES tb_materiais(mat_id)
+  req_codigo        VARCHAR(30) UNIQUE NOT NULL,   -- Ex.: REQ-000123
+  req_fk_user       INT NOT NULL,                  -- Quem requisitou
+  req_status        ENUM(
+                      'Pendente',                  -- criada, aguardando aprovação/atendimento
+                      'Aprovada',                  -- aprovada, ainda não atendida
+                      'Atendida',                  -- todos os itens saíram
+                      'Em Uso',                    -- itens estão com o requisitante
+                      'Parcial',                   -- alguma parte atendida/devolvida
+                      'Devolvida',                  -- tudo devolvido
+                      'Rejeitada',
+                      'Cancelada'
+                    ) NOT NULL DEFAULT 'Pendente',
+  req_date          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  req_needed_at     DATE NULL,                     -- quando precisa
+  req_local_entrega VARCHAR(120) NULL,             -- onde entregar/retirar
+  req_justificativa VARCHAR(255) NULL,             -- por que precisa
+  req_observacoes   VARCHAR(255) NULL,             -- observações gerais
+  req_approved_by   INT NULL,                      -- quem aprovou/rejeitou/cancelou
+  req_approved_at   DATETIME NULL,                 -- quando decidiu
+  createdAt         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_req_user       FOREIGN KEY (req_fk_user)     REFERENCES tb_users(user_id),
+  CONSTRAINT fk_req_aprv_user  FOREIGN KEY (req_approved_by) REFERENCES tb_users(user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE INDEX idx_req_hdr_status_date ON tb_requisicoes (req_status, req_date);
+CREATE INDEX idx_req_hdr_user        ON tb_requisicoes (req_fk_user);
+CREATE INDEX idx_req_hdr_needed      ON tb_requisicoes (req_needed_at);
+
+
+/* ------------------------------------------------------
+   2) Itens da requisição (sem preço) + campos de devolução
+   ------------------------------------------------------ */
+CREATE TABLE tb_requisicoes_itens (
+  rqi_id               INT AUTO_INCREMENT PRIMARY KEY,
+  rqi_fk_requisicao    INT NOT NULL,
+  rqi_fk_material      INT NULL,                   -- ON DELETE SET NULL preserva histórico
+  rqi_descricao        VARCHAR(255) NULL,          -- observação do item
+  rqi_quantidade       INT NOT NULL,               -- solicitada (>0; valide no back)
+  rqi_qtd_atendida     INT NOT NULL DEFAULT 0,     -- quanto saiu do estoque (saida; valide no back)
+  -- ---- Devolução ----
+  rqi_devolvido        ENUM('Nao','Parcial','Sim') NOT NULL DEFAULT 'Nao',
+  rqi_qtd_devolvida    INT NOT NULL DEFAULT 0,     -- quanto voltou (entrada; valide no back)
+  rqi_data_devolucao   DATETIME NULL,              -- última data de devolução registrada
+  rqi_condicao_retorno ENUM('Boa','Danificada','Perdida') NULL,  -- estado ao retornar
+  rqi_obs_devolucao    VARCHAR(255) NULL,          -- observações sobre devolução/avaria
+  -- ---- Status por item ----
+  rqi_status           ENUM('Pendente','Atendido','Em Uso','Parcial','Devolvido','Cancelado')
+                       NOT NULL DEFAULT 'Pendente',
+  createdAt            DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt            DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_rqi_req FOREIGN KEY (rqi_fk_requisicao)
+    REFERENCES tb_requisicoes(req_id) ON DELETE CASCADE,
+  CONSTRAINT fk_rqi_mat FOREIGN KEY (rqi_fk_material)
+    REFERENCES tb_materiais(mat_id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_rqi_req ON tb_requisicoes_itens (rqi_fk_requisicao);
+CREATE INDEX idx_rqi_mat ON tb_requisicoes_itens (rqi_fk_material);
+
+
+/* ------------------------------------------------------
+   3) Trilhas de decisão (opcional, mas útil para auditoria)
+   ------------------------------------------------------ */
+CREATE TABLE tb_requisicoes_decisoes (
+  dec_id            INT AUTO_INCREMENT PRIMARY KEY,
+  dec_fk_requisicao INT NOT NULL,
+  dec_fk_user       INT NOT NULL,                   -- quem decidiu
+  dec_tipo          ENUM('Aprovar','Rejeitar','Cancelar') NOT NULL,
+  dec_motivo        VARCHAR(255) NULL,
+  dec_data          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_dec_req  FOREIGN KEY (dec_fk_requisicao) REFERENCES tb_requisicoes(req_id) ON DELETE CASCADE,
+  CONSTRAINT fk_dec_user FOREIGN KEY (dec_fk_user)       REFERENCES tb_users(user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_dec_req ON tb_requisicoes_decisoes (dec_fk_requisicao, dec_data);
+  ------------------------------------------------------ */
+drop table if exists tb_movimentacoes;
 CREATE TABLE tb_movimentacoes (
   mov_id           INT AUTO_INCREMENT PRIMARY KEY,
   mov_fk_material  INT NOT NULL,
@@ -280,6 +359,30 @@ SELECT
   user_id,
   (SELECT template_id FROM tb_permission_templates WHERE template_code='baseline')
 FROM tb_users;
+
+-- ------------------------------
+ALTER TABLE tb_movimentacoes
+  DROP FOREIGN KEY tb_movimentacoes_ibfk_1;
+
+-- 1.2) Torne mov_fk_material aceitável nulo
+ALTER TABLE tb_movimentacoes
+  MODIFY mov_fk_material INT NULL;
+
+-- 1.3) Recrie a FK com ON DELETE SET NULL
+ALTER TABLE tb_movimentacoes
+  ADD CONSTRAINT fk_mov_material
+    FOREIGN KEY (mov_fk_material)
+    REFERENCES tb_materiais(mat_id)
+    ON DELETE SET NULL;
+
+
+ALTER TABLE tb_movimentacoes 
+  ADD COLUMN mov_material_nome VARCHAR(100) NOT NULL AFTER mov_fk_material,
+  ADD COLUMN mov_tipo_nome VARCHAR(100) NOT NULL AFTER mov_material_nome;
+
+-- -----------------------------------
+
+
 
 
 select* from tb_reciclagem;
