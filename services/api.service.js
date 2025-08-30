@@ -66,7 +66,26 @@ module.exports = {
 					"POST   /requisicoes": { action: "requisicoes.create", module: "requisicao", actionName: "criar" },
 					"PUT    /requisicoes/:id": { action: "requisicoes.updateStatus", module: "requisicao", actionName: "editar" },
 					"DELETE /requisicoes/:id": { action: "requisicoes.remove", module: "requisicao", actionName: "eliminar" },
+					"POST /requisicoes/:id/decidir": { action: "requisicoes.decidir", module: "requisicao", actionName: "criar" },
+					"POST /requisicoes/:id/devolver": { action: "requisicoes.devolver", module: "requisicao", actionName: "criar" },
+					"POST /requisicoes/:id/atender": { action: "requisicoes.atender", module: "requisicao", actionName: "criar" },
 
+					// ===== Vendas (Caixa de loja) =====
+					"GET    /vendas": { action: "vendas.list", module: "venda", actionName: "visualizar" },
+					"GET    /vendas/:id": { action: "vendas.get", module: "venda", actionName: "visualizar" },
+					"POST   /vendas": { action: "vendas.create", module: "venda", actionName: "criar" },
+					"POST   /vendas/:id/itens": { action: "vendas.addItem", module: "venda", actionName: "criar" },
+					"DELETE /vendas/:id/itens/:itemId": { action: "vendas.removeItem", module: "venda", actionName: "criar" },
+					"POST   /vendas/:id/desconto": { action: "vendas.desconto", module: "venda", actionName: "criar" },
+					"POST   /vendas/:id/pagar": { action: "vendas.pagar", module: "venda", actionName: "criar" },
+					"POST   /vendas/:id/cancelar": { action: "vendas.cancelar", module: "venda", actionName: "eliminar" },
+
+					// ===== Caixa (um por dia) =====
+					"GET    /caixas/aberto": { action: "caixas.aberto", module: "venda", actionName: "visualizar" },
+					"POST   /caixas/abrir": { action: "caixas.abrir", module: "venda", actionName: "criar" },
+					"POST   /caixas/fechar": { action: "caixas.fechar", module: "venda", actionName: "criar" },
+
+					
 					// Dashboard
 					"GET    /dashboard/resumo": { action: "dashboard.resumo", module: "dashboard", actionName: "visualizar" }
 				},

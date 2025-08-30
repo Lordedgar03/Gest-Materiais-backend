@@ -8,7 +8,7 @@ const Recibo               = require('./recibo.model');
 const Categoria            = require('./categoria.model');
 const Tipo                 = require('./tipo.model');
 const Material             = require('./material.model');
-const Requisicao         = require('./requisicao.model');
+const Requisicao           = require('./requisicao.model');
 const RequisicaoItem       = require('./requisicaoItem.model');
 const RequisicaoDecisao    = require('./requisicaoDecisao.model');
 const Movimentacao         = require('./movimentacao.model');
@@ -18,6 +18,15 @@ const PermissionTemplate   = require('./permissionTemplate.model');
 const Action               = require('./action.model');
 const TemplateAction       = require('./templateAction.model');
 const UserTemplate         = require('./userTemplate.model');
+
+// === Novos models (apenas adicionados) ===
+const Caixa               = require('./Caixa.model');
+const Venda                = require('./venda.model');
+const VendaItem            = require('./vendaItem.model');
+const Aluno                = require('./aluno.model');
+const Configuracao         = require('./configuracao.model');
+const Almoco               = require('./almoco.model');
+const AlunoAlmoco          = require('./alunoAlmoco.model');
 
 // -----------------------------------------------------------------------------
 // 1) Associação direta para UserRole → Role (usada, por exemplo, no loginUser)
@@ -227,6 +236,91 @@ User.hasMany(RequisicaoDecisao, {
   as:         "decisoesTomadas"
 });
 
+// -----------------------------------------------------------------------------
+// 10) Vendas & Caixa (NOVO)
+// -----------------------------------------------------------------------------
+Caixa.hasMany(Venda, {
+  foreignKey: "ven_fk_caixa",
+  sourceKey:  "cx_id",
+  as:         "vendas"
+});
+Venda.belongsTo(Caixa, {
+  foreignKey: "ven_fk_caixa",
+  targetKey:  "cx_id",
+  as:         "caixa"
+});
+
+Venda.hasMany(VendaItem, {
+  foreignKey: "vni_fk_venda",
+  sourceKey:  "ven_id",
+  as:         "itens"
+});
+VendaItem.belongsTo(Venda, {
+  foreignKey: "vni_fk_venda",
+  targetKey:  "ven_id",
+  as:         "venda"
+});
+
+// -----------------------------------------------------------------------------
+// 11) Almoços (NOVO)
+// -----------------------------------------------------------------------------
+Almoco.hasMany(AlunoAlmoco, {
+  foreignKey: "ala_fk_almoco",
+  sourceKey:  "alm_id",
+  as:         "marcacoes"
+});
+AlunoAlmoco.belongsTo(Almoco, {
+  foreignKey: "ala_fk_almoco",
+  targetKey:  "alm_id",
+  as:         "almoco"
+});
+
+Aluno.hasMany(AlunoAlmoco, {
+  foreignKey: "ala_fk_aluno",
+  sourceKey:  "alu_id",
+  as:         "almocos"
+});
+AlunoAlmoco.belongsTo(Aluno, {
+  foreignKey: "ala_fk_aluno",
+  targetKey:  "alu_id",
+  as:         "aluno"
+});
+
+// -----------------------------------------------------------------------------
+// 12) Recibo ↔ User/Venda/Almoço (NOVO)
+// -----------------------------------------------------------------------------
+Recibo.belongsTo(User, {
+  foreignKey: "rec_fk_user",
+  targetKey:  "user_id",
+  as:         "operador"
+});
+User.hasMany(Recibo, {
+  foreignKey: "rec_fk_user",
+  sourceKey:  "user_id",
+  as:         "recibosEmitidos"
+});
+
+Recibo.belongsTo(Venda, {
+  foreignKey: "rec_fk_venda",
+  targetKey:  "ven_id",
+  as:         "venda"
+});
+Venda.hasMany(Recibo, {
+  foreignKey: "rec_fk_venda",
+  sourceKey:  "ven_id",
+  as:         "recibos"
+});
+
+Recibo.belongsTo(AlunoAlmoco, {
+  foreignKey: "rec_fk_almoco",
+  targetKey:  "ala_id",
+  as:         "almoco"
+});
+AlunoAlmoco.hasMany(Recibo, {
+  foreignKey: "rec_fk_almoco",
+  sourceKey:  "ala_id",
+  as:         "recibos"
+});
 
 // -----------------------------------------------------------------------------
 // Export all models + sequelize instance
@@ -250,5 +344,14 @@ module.exports = {
   PermissionTemplate,
   Action,
   TemplateAction,
-  UserTemplate
+  UserTemplate,
+
+  // Novos exports
+  Caixa,
+  Venda,
+  VendaItem,
+  Aluno,
+  Configuracao,
+  Almoco,
+  AlunoAlmoco
 };
