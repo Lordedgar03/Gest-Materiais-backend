@@ -95,7 +95,37 @@ module.exports = {
 					"POST   /vendas/:id/recibo/pdf": { action: "recibos.receiptPdf", module: "recibo", actionName: "gerarRecibo" },
 					"GET    /recibos/:id/pdf": { action: "recibos.pdf", module: "recibo", actionName: "visualizar" },
 					// Dashboard
-					"GET    /dashboard/resumo": { action: "dashboard.resumo", module: "dashboard", actionName: "visualizar" }
+					"GET    /dashboard/resumo": { action: "dashboard.resumo", module: "dashboard", actionName: "visualizar" },
+
+					// ============================================================
+					// ================= MÓDULO ALMOÇOS (junto a Vendas) =========
+					// ============================================================
+
+					// ---- Configurações de Almoço ----
+					"GET    /configuracoes":            { action: "configuracoes.list",    module: "venda", actionName: "visualizar" },
+					"GET    /configuracoes/:chave":     { action: "configuracoes.get",     module: "venda", actionName: "visualizar" },
+					"GET    /configuracoes/value/:chave":{ action: "configuracoes.getValue", module: "venda", actionName: "visualizar" },
+					"POST   /configuracoes":            { action: "configuracoes.upsert",  module: "venda", actionName: "editar" },
+					"POST   /configuracoes/bulk":       { action: "configuracoes.bulkUpsert", module: "venda", actionName: "editar" },
+
+					// ---- Almoços (preço + relatórios) ----
+					"PATCH  /almocos/preco":            { action: "almocos.atualizarPrecoPadrao", module: "venda", actionName: "editar" },
+					"GET    /almocos/preco-padrao":     { action: "almocos.precoPadrao",          module: "venda", actionName: "visualizar" },
+					"GET    /almocos/relatorios/por-data":   { action: "almocos.relatorioPorData",   module: "venda", actionName: "visualizar" },
+					"GET    /almocos/relatorios/intervalo":  { action: "almocos.relatorioIntervalo", module: "venda", actionName: "visualizar" },
+					"GET    /almocos/relatorios/mensal":     { action: "almocos.relatorioMensal",    module: "venda", actionName: "visualizar" },
+					"GET    /almocos/relatorios/hoje":       { action: "almocos.relatorioHoje",      module: "venda", actionName: "visualizar" },
+
+					// ---- Marcações de Almoço ----
+					"POST   /marcacoes":             { action: "marcacoes.marcar",     module: "venda", actionName: "criar" },
+					"PATCH  /marcacoes/:id":         { action: "marcacoes.atualizar",  module: "venda", actionName: "editar" },
+					"GET    /marcacoes/marcados":    { action: "marcacoes.marcados",   module: "venda", actionName: "visualizar" },
+
+					// ---- Alunos (base do módulo Almoço) ----
+					"GET    /alunos":        { action: "alunos.list",   module: "venda", actionName: "visualizar" },
+					"POST   /alunos":        { action: "alunos.create", module: "venda", actionName: "criar" },
+					"PATCH  /alunos/:id":    { action: "alunos.update", module: "venda", actionName: "editar" },
+					"PATCH  /alunos/:id/status": { action: "alunos.setStatus", module: "venda", actionName: "editar" },
 				},
 				bodyParsers: { json: true, urlencoded: { extended: true } },
 				cors: { origin: "*", methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"] }
