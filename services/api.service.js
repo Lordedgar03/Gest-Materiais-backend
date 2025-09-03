@@ -85,7 +85,15 @@ module.exports = {
 					"POST   /caixas/abrir": { action: "caixas.abrir", module: "venda", actionName: "criar" },
 					"POST   /caixas/fechar": { action: "caixas.fechar", module: "venda", actionName: "criar" },
 
-					
+					// Perfil (autoatendimento)
+					"GET    /profile": { action: "profile.me", module: "profile", actionName: "self" },
+					"PUT    /profile": { action: "profile.update", module: "profile", actionName: "self" },
+					"PUT    /profile/password": { action: "profile.changePassword", module: "profile", actionName: "self" },
+
+					// Recibos
+					"POST   /vendas/:id/recibo": { action: "recibos.gerar", module: "recibo", actionName: "gerarRecibo" },
+					"POST   /vendas/:id/recibo/pdf": { action: "recibos.receiptPdf", module: "recibo", actionName: "gerarRecibo" },
+					"GET    /recibos/:id/pdf": { action: "recibos.pdf", module: "recibo", actionName: "visualizar" },
 					// Dashboard
 					"GET    /dashboard/resumo": { action: "dashboard.resumo", module: "dashboard", actionName: "visualizar" }
 				},
@@ -147,7 +155,8 @@ module.exports = {
 				autorizar: "approve",
 				requisitar: "request",
 				gerarRecibo: "generate_receipt",
-				logout: null
+				logout: null,
+				self: null
 			};
 
 			const { module, actionName } = alias;

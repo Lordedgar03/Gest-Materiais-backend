@@ -50,59 +50,59 @@ module.exports = {
          * GET /vendas
          * Query: status?, data_ini?, data_fim?, caixa?
          */
-      // dentro de module.exports.actions
-list: {
-  rest: "GET /vendas",
-  cache: false,
-  params: {
-    q: { type: "string", optional: true },                                   // pesquisa (código/cliente)
-    status: { type: "string", optional: true, enum: ["Todos","Aberta","Paga","Cancelada","Estornada"] },
-    caixa: { type: "number", convert: true, optional: true },
-    from: { type: "string", optional: true },                                 // aceitamos from/to...
-    to:   { type: "string", optional: true },
-    data_ini: { type: "string", optional: true },                             // ...e também data_ini/data_fim (retrocompat)
-    data_fim: { type: "string", optional: true }
-  },
-  async handler(ctx) {
-    const where = {};
+        // dentro de module.exports.actions
+        list: {
+            rest: "GET /vendas",
+            cache: false,
+            params: {
+                q: { type: "string", optional: true },                                   // pesquisa (código/cliente)
+                status: { type: "string", optional: true, enum: ["Todos", "Aberta", "Paga", "Cancelada", "Estornada"] },
+                caixa: { type: "number", convert: true, optional: true },
+                from: { type: "string", optional: true },                                 // aceitamos from/to...
+                to: { type: "string", optional: true },
+                data_ini: { type: "string", optional: true },                             // ...e também data_ini/data_fim (retrocompat)
+                data_fim: { type: "string", optional: true }
+            },
+            async handler(ctx) {
+                const where = {};
 
-    // status
-    if (ctx.params.status && ctx.params.status !== "Todos") {
-      where.ven_status = ctx.params.status;
-    }
+                // status
+                if (ctx.params.status && ctx.params.status !== "Todos") {
+                    where.ven_status = ctx.params.status;
+                }
 
-    // caixa (opcional)
-    if (ctx.params.caixa) where.ven_fk_caixa = Number(ctx.params.caixa);
+                // caixa (opcional)
+                if (ctx.params.caixa) where.ven_fk_caixa = Number(ctx.params.caixa);
 
-    // datas (from/to ou data_ini/data_fim)
-    const from = ctx.params.from || ctx.params.data_ini;
-    const to   = ctx.params.to   || ctx.params.data_fim;
-    if (from || to) {
-      where.ven_data = {};
-      if (from) where.ven_data[Op.gte] = new Date(from + "T00:00:00");
-      if (to)   where.ven_data[Op.lte] = new Date(to   + "T23:59:59");
-    }
+                // datas (from/to ou data_ini/data_fim)
+                const from = ctx.params.from || ctx.params.data_ini;
+                const to = ctx.params.to || ctx.params.data_fim;
+                if (from || to) {
+                    where.ven_data = {};
+                    if (from) where.ven_data[Op.gte] = new Date(from + "T00:00:00");
+                    if (to) where.ven_data[Op.lte] = new Date(to + "T23:59:59");
+                }
 
-    // busca textual (q) em código e nome do cliente
-    const q = (ctx.params.q || "").trim();
-    if (q) {
-      const rows = await this.adapter.model.findAll({
-        where: {
-          ...where,
-          [Op.or]: [
-            { ven_codigo:      { [Op.like]: `%${q}%` } },
-            { ven_cliente_nome:{ [Op.like]: `%${q}%` } }
-          ]
+                // busca textual (q) em código e nome do cliente
+                const q = (ctx.params.q || "").trim();
+                if (q) {
+                    const rows = await this.adapter.model.findAll({
+                        where: {
+                            ...where,
+                            [Op.or]: [
+                                { ven_codigo: { [Op.like]: `%${q}%` } },
+                                { ven_cliente_nome: { [Op.like]: `%${q}%` } }
+                            ]
+                        },
+                        order: [["ven_id", "DESC"]]
+                    });
+                    return rows.map(r => (r.toJSON ? r.toJSON() : r));
+                }
+
+                // sem 'q': pode usar o helper do adapter
+                return this.adapter.find({ query: where, sort: ["-ven_id"] });
+            }
         },
-        order: [["ven_id", "DESC"]]
-      });
-      return rows.map(r => (r.toJSON ? r.toJSON() : r));
-    }
-
-    // sem 'q': pode usar o helper do adapter
-    return this.adapter.find({ query: where, sort: ["-ven_id"] });
-  }
-},
 
         /**
          * GET /vendas/:id  (inclui itens)
@@ -258,6 +258,7 @@ list: {
          * POST /vendas/:id/pagar
          * Finaliza venda: baixa estoque, cria movimentações, gera recibo.
          */
+        // ... dentro de actions:
         pagar: {
             rest: "POST /vendas/:id/pagar",
             params: { id: { type: "number", convert: true, positive: true } },
@@ -272,11 +273,11 @@ list: {
                     const itens = await VendaItem.findAll({ where: { vni_fk_venda: id }, raw: true, transaction: tx });
                     if (!itens.length) throw new Error("Venda sem itens.");
 
-                    // garante totais calculados
+                    // recalcula totais + foto atual da venda
                     await this._recalcTotals(id, tx);
                     const vendaNow = await this.adapter.model.findByPk(id, { transaction: tx, raw: true });
 
-                    // baixa de estoque + movimentações (saida)
+                    // baixa de estoque + movimentações
                     for (const it of itens) {
                         const mat = await Material.findByPk(it.vni_fk_material, { raw: true, transaction: tx });
                         if (!mat) throw new Error(`Material ${it.vni_fk_material} não encontrado.`);
@@ -291,7 +292,6 @@ list: {
                             { where: { mat_id: mat.mat_id }, transaction: tx }
                         );
 
-                        // descobre nome do tipo (opcional) para mov_tipo_nome
                         let tipoNome = "";
                         if (mat.mat_fk_tipo) {
                             const tipo = await Tipo.findByPk(mat.mat_fk_tipo, { raw: true, transaction: tx });
@@ -318,8 +318,8 @@ list: {
                         { where: { ven_id: id }, transaction: tx }
                     );
 
-                    // recibo
-                    await Recibo.create({
+                    // cria recibo
+                    const rec = await Recibo.create({
                         rec_fk_user: venda.ven_fk_user,
                         rec_tipo: "Venda de Material",
                         rec_total: vendaNow.ven_total,
@@ -329,7 +329,21 @@ list: {
                         data: new Date()
                     }, { transaction: tx });
 
-                    return { success: true, message: "Venda paga e estoque atualizado." };
+                    // devolve dados para o front imprimir
+                    return {
+                        success: true,
+                        message: "Venda paga e estoque atualizado.",
+                        venda: {
+                            ven_id: vendaNow.ven_id,
+                            ven_codigo: vendaNow.ven_codigo,
+                            ven_total: vendaNow.ven_total
+                        },
+                        recibo: {
+                            rec_id: rec.rec_id,
+                            // dica de URL (o front já sabe usar isso se existir)
+                            pdf_hint: `/api/vendas/${vendaNow.ven_id}/recibo/pdf`
+                        }
+                    };
                 });
             }
         },
