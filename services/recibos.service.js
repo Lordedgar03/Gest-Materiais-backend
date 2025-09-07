@@ -128,94 +128,148 @@ module.exports = {
      * POST /vendas/:id/recibo/pdf → devolve um HTML imprimível
      * (o front abre num iframe e chama window.print())
      */
-    receiptPdf: {
-      rest: "POST /vendas/:id/recibo/pdf",
-      auth: true,
-      params: { id: { type: "number", convert: true, positive: true } },
-      async handler(ctx) {
-        const venId = Number(ctx.params.id);
+ // dentro de module.exports.actions em services/recibos.service.js
+receiptPdf: {
+  rest: "POST /vendas/:id/recibo/pdf",
+  auth: true,
+  params: { id: { type: "number", convert: true, positive: true } },
+  async handler(ctx) {
+    const venId = Number(ctx.params.id);
 
-        // Lê cabeçalho da venda
-        const venda = await sequelize.query(
-          `SELECT ven_id, ven_codigo, ven_total, ven_fk_user, ven_cliente_nome, ven_subtotal, ven_desconto, ven_data
-           FROM tb_vendas WHERE ven_id = ?`,
-          { replacements: [venId], type: sequelize.QueryTypes.SELECT }
-        ).then(rows => rows[0]);
+    // Lê cabeçalho da venda
+    const venda = await sequelize.query(
+      `SELECT ven_id, ven_codigo, ven_total, ven_fk_user, ven_cliente_nome,
+              ven_subtotal, ven_desconto, ven_data
+       FROM tb_vendas WHERE ven_id = ?`,
+      { replacements: [venId], type: sequelize.QueryTypes.SELECT }
+    ).then(rows => rows[0]);
 
-        if (!venda) throw new Error("Venda não encontrada.");
+    if (!venda) throw new Error("Venda não encontrada.");
 
-        // Itens
-        const itens = await VendaItem.findAll({ where: { vni_fk_venda: venId }, raw: true });
+    // Itens
+    const itens = await VendaItem.findAll({ where: { vni_fk_venda: venId }, raw: true });
 
-        // nomes dos produtos
-        const nomeById = {};
-        if (itens.length) {
-          const ids = [...new Set(itens.map(i => i.vni_fk_material))].filter(Boolean);
-          if (ids.length) {
-            const mats = await Material.findAll({ where: { mat_id: ids }, raw: true });
-            mats.forEach(m => { nomeById[m.mat_id] = m.mat_nome; });
-          }
-        }
+    // nomes dos produtos
+    const nomeById = {};
+    if (itens.length) {
+      const ids = [...new Set(itens.map(i => i.vni_fk_material))].filter(Boolean);
+      if (ids.length) {
+        const mats = await Material.findAll({ where: { mat_id: ids }, raw: true });
+        mats.forEach(m => { nomeById[m.mat_id] = m.mat_nome; });
+      }
+    }
 
-        const rows = itens.map(it => {
+    // helpers
+    const esc = (s) =>
+      String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    const money = (n) => Number(n || 0).toFixed(2);
+
+    // linhas dos itens
+    const rows = itens.length
+      ? itens.map(it => {
           const nome = nomeById[it.vni_fk_material] || `ID ${it.vni_fk_material}`;
-          const total = Number(it.vni_total || 0).toFixed(2);
-          const pu = Number(it.vni_preco_unit || 0).toFixed(2);
+          const pu = money(it.vni_preco_unit);
+          const tot = money(it.vni_total);
           return `
 <tr>
-  <td style="padding:6px 8px;border-bottom:1px solid #eee">${nome}</td>
-  <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right">${pu}</td>
-  <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right">${it.vni_qtd}</td>
-  <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right"><strong>${total}</strong></td>
+  <td class="nm">${esc(nome)}</td>
+  <td class="q">${it.vni_qtd}</td>
+  <td class="pu">${pu}</td>
+  <td class="t">${tot}</td>
 </tr>`;
-        }).join("");
+        }).join("")
+      : `<tr><td colspan="4" class="empty">Sem itens.</td></tr>`;
 
-        const html = `<!doctype html>
+    // largura do papel (58 ou 80 mm)
+    const PAPER_MM = 80;
+
+    const html = `<!doctype html>
 <html>
 <head>
   <meta charset="utf-8"/>
-  <title>Recibo ${venda.ven_codigo}</title>
+  <title>Recibo ${esc(venda.ven_codigo)}</title>
   <style>
-    body { font-family: system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:#111; }
-    .wrap { max-width: 640px; margin: 24px auto; }
-    .hdr { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
-    .muted { color:#666; font-size:12px; }
-    table { width:100%; border-collapse:collapse; font-size:14px; }
+    @page { size: ${PAPER_MM}mm auto; margin: 0; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      width: ${PAPER_MM}mm;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      color: #000; background: #fff;
+    }
+    .wrap { padding: 2mm 2mm; }
+    .center { text-align: center; }
+    .muted { color: #000; opacity: .9; }
+    .h1 { font-weight: 700; font-size: 12.5px; }
+    .h2 { font-size: 11px; margin-top: 1mm; }
+    .small { font-size: 10px; }
+    hr { border: 0; border-top: 1px dashed #000; margin: 2mm 0; }
+    .row { display: flex; justify-content: space-between; align-items: baseline; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    td { padding: 1mm 0; font-size: 11px; vertical-align: top; }
+    td.nm { width: calc(100% - 44mm); padding-right: 1mm; word-wrap: break-word; overflow-wrap: anywhere; }
+    td.q  { width: 10mm; text-align: right; }
+    td.pu { width: 14mm; text-align: right; }
+    td.t  { width: 20mm; text-align: right; font-weight: 700; }
+    .empty { text-align: center; padding: 4mm 0; font-size: 10px; }
+    .totals .row { margin: 1mm 0; }
+    .totals .lbl { font-size: 11px; }
+    .totals .val { font-size: 11px; }
+    .totals .grand .lbl, .totals .grand .val { font-weight: 700; font-size: 12px; }
+    .footer { margin-top: 3mm; text-align: center; font-size: 10px; }
   </style>
 </head>
 <body onload="window.print()">
   <div class="wrap">
-    <div class="hdr">
-      <div>
-        <h2 style="margin:0">Recibo — ${venda.ven_codigo}</h2>
-        <div class="muted">Cliente: ${venda.ven_cliente_nome || "-"}</div>
-        <div class="muted">Data: ${new Date(venda.ven_data).toLocaleString()}</div>
-      </div>
-      <div style="text-align:right">
-        <div class="muted">Subtotal: € ${Number(venda.ven_subtotal).toFixed(2)}</div>
-        <div class="muted">Desconto: € ${Number(venda.ven_desconto).toFixed(2)}</div>
-        <div style="font-weight:700">Total: € ${Number(venda.ven_total).toFixed(2)}</div>
-      </div>
-    </div>
-    <table>
+    <div class="center h1">EPSTP</div>
+    <div class="center h2 muted">Recibo — ${esc(venda.ven_codigo)}</div>
+
+    <div class="small" style="margin-top:2mm">Cliente: ${esc(venda.ven_cliente_nome || "-")}</div>
+    <div class="small">Data: ${new Date(venda.ven_data).toLocaleString()}</div>
+
+    <hr/>
+
+    <table aria-label="Itens">
       <thead>
         <tr>
-          <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #ddd">Produto</th>
-          <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #ddd">Preço</th>
-          <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #ddd">Qtd</th>
-          <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #ddd">Total</th>
+          <td class="small muted">Produto</td>
+          <td class="small muted q">Qtd</td>
+          <td class="small muted pu">Preço</td>
+          <td class="small muted t">Total</td>
         </tr>
       </thead>
-      <tbody>${rows || `<tr><td colspan="4" style="padding:8px">Sem itens.</td></tr>`}</tbody>
+      <tbody>${rows}</tbody>
     </table>
-    <p class="muted" style="margin-top:16px">Obrigado pela preferência.</p>
+
+    <hr/>
+
+    <section class="totals" aria-label="Totais">
+      <div class="row"><div class="lbl">Subtotal</div><div class="val">€ ${money(venda.ven_subtotal)}</div></div>
+      <div class="row"><div class="lbl">Desconto</div><div class="val">€ ${money(venda.ven_desconto)}</div></div>
+      <div class="row grand"><div class="lbl">TOTAL</div><div class="val">€ ${money(venda.ven_total)}</div></div>
+    </section>
+
+    <hr/>
+
+    <div class="footer muted">Obrigado pela preferência.</div>
   </div>
+
+  <script>
+    // Fecha a janela (quando aberta em popup) após imprimir
+    window.onafterprint = () => setTimeout(() => window.close && window.close(), 300);
+  </script>
 </body>
 </html>`;
 
-        ctx.meta.$responseType = "text/html; charset=utf-8";
-        return html;
-      }
-    }
+    ctx.meta.$responseType = "text/html; charset=utf-8";
+    return html;
+  }
+}
+
   }
 };
