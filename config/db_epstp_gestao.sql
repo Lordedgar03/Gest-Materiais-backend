@@ -342,6 +342,37 @@ FROM
 CROSS JOIN tb_actions a
 WHERE a.action_code IN ('view','create','generate_receipt','delete');
 
+-- *************************************************************
+
+INSERT INTO tb_template_actions (template_id, action_id, resource_type)
+SELECT
+  (SELECT template_id FROM tb_permission_templates WHERE template_code='manage_sales') AS template_id,
+  a.action_id,
+  'aluno' AS resource_type
+FROM tb_actions a
+WHERE a.action_code IN ('view','create','edit','delete');
+-- ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+INSERT INTO tb_template_actions (template_id, action_id, resource_type)
+SELECT
+  (SELECT template_id FROM tb_permission_templates WHERE template_code='manage_sales') AS template_id,
+  a.action_id,
+  'almoço' AS resource_type
+FROM tb_actions a
+WHERE a.action_code IN ('view','create','edit','delete');
+-- +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+INSERT INTO tb_template_actions (template_id, action_id, resource_type)
+SELECT
+  (SELECT template_id FROM tb_permission_templates WHERE template_code='manage_sales') AS template_id,
+  a.action_id,
+  'configurar' AS resource_type
+FROM tb_actions a
+WHERE a.action_code IN ('view','create','edit','delete');
+
+
+-- ******************************
+
 -- 5.4) Atribuição de templates aos usuários, opcionalmente com escopo
 CREATE TABLE tb_user_templates (
   id            INT AUTO_INCREMENT PRIMARY KEY,
@@ -382,8 +413,182 @@ ALTER TABLE tb_movimentacoes
 
 -- -----------------------------------
 
+-- ------------
+CREATE TABLE IF NOT EXISTS tb_caixas (
+  cx_id            INT AUTO_INCREMENT PRIMARY KEY,
+  cx_data          DATE NOT NULL UNIQUE,                          -- 1 caixa por dia
+  cx_status        ENUM('Aberto','Fechado') NOT NULL DEFAULT 'Aberto',
+  cx_aberto_por    INT NOT NULL,                                  -- user do operador
+  cx_aberto_em     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  cx_saldo_inicial DECIMAL(10,2) NOT NULL DEFAULT 0,              -- opcional
+  cx_qtd_vendas    INT NOT NULL DEFAULT 0,                        -- preenchido no fechamento
+  cx_total_vendas  DECIMAL(10,2) NOT NULL DEFAULT 0,              -- preenchido no fechamento
+  cx_saldo_final   DECIMAL(10,2) NOT NULL DEFAULT 0,              -- opcional (inicial + total)
+  cx_fechado_por   INT NULL,
+  cx_fechado_em    DATETIME NULL,
+  cx_obs           VARCHAR(255) NULL,
+  CONSTRAINT fk_cx_aberto_por  FOREIGN KEY (cx_aberto_por) REFERENCES tb_users(user_id),
+  CONSTRAINT fk_cx_fechado_por FOREIGN KEY (cx_fechado_por) REFERENCES tb_users(user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+-- GUARDE o nome do comprador na venda (vai para o recibo)
+CREATE TABLE IF NOT EXISTS tb_vendas (
+  ven_id            INT AUTO_INCREMENT PRIMARY KEY,
+  ven_codigo        VARCHAR(30) UNIQUE NOT NULL,       -- ex.: VEN-000123
+  ven_fk_caixa      INT NOT NULL,                      -- liga ao caixa do dia
+  ven_fk_user       INT NOT NULL,                      -- operador (do token)
+  ven_cliente_nome  VARCHAR(120) NOT NULL,             -- digitado no balcão
+  ven_status        ENUM('Aberta','Paga','Cancelada','Estornada') NOT NULL DEFAULT 'Aberta',
+  ven_subtotal      DECIMAL(10,2) NOT NULL DEFAULT 0,
+  ven_desconto      DECIMAL(10,2) NOT NULL DEFAULT 0,
+  ven_total         DECIMAL(10,2) NOT NULL DEFAULT 0,
+  ven_obs           VARCHAR(255) NULL,
+  ven_data          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  createdAt         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_ven_caixa FOREIGN KEY (ven_fk_caixa) REFERENCES tb_caixas(cx_id) ON DELETE RESTRICT,
+  CONSTRAINT fk_ven_user  FOREIGN KEY (ven_fk_user)  REFERENCES tb_users(user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX  idx_vendas_status_data ON tb_vendas (ven_status, ven_data);
+CREATE INDEX  idx_vendas_caixa       ON tb_vendas (ven_fk_caixa);
+
+CREATE TABLE IF NOT EXISTS tb_vendas_itens (
+  vni_id           INT AUTO_INCREMENT PRIMARY KEY,
+  vni_fk_venda     INT NOT NULL,
+  vni_fk_material  INT NOT NULL,
+  vni_qtd          INT NOT NULL,
+  vni_preco_unit   DECIMAL(10,2) NOT NULL,            -- snapshot do preço
+  vni_total        DECIMAL(10,2) NOT NULL,
+  createdAt        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_vni_venda    FOREIGN KEY (vni_fk_venda)    REFERENCES tb_vendas(ven_id) ON DELETE CASCADE,
+  CONSTRAINT fk_vni_material FOREIGN KEY (vni_fk_material) REFERENCES tb_materiais(mat_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX  idx_vni_venda ON tb_vendas_itens (vni_fk_venda);
 
 
 
-select* from tb_reciclagem;
-select* from tb_users;
+-- Movimentações: permitir registrar a venda (baixa/estorno de estoque)
+ALTER TABLE tb_movimentacoes
+  ADD COLUMN  mov_fk_venda INT NULL AFTER mov_fk_requisicao;
+
+ALTER TABLE tb_movimentacoes
+  ADD CONSTRAINT fk_mov_venda
+  FOREIGN KEY (mov_fk_venda) REFERENCES tb_vendas(ven_id) ON DELETE SET NULL;
+
+-- Recibos: guardar nome do comprador + referência à venda
+ALTER TABLE tb_recibos
+  MODIFY rec_total DECIMAL(10,2) NOT NULL,
+  ADD COLUMN  rec_ref          VARCHAR(100) NULL AFTER rec_total,
+  ADD COLUMN  rec_fk_venda     INT NULL AFTER rec_ref,
+  ADD COLUMN rec_cliente_nome VARCHAR(120) NULL AFTER rec_fk_venda;
+
+ALTER TABLE tb_recibos
+  ADD CONSTRAINT  fk_rec_venda
+  FOREIGN KEY (rec_fk_venda) REFERENCES tb_vendas(ven_id) ON DELETE SET NULL;
+
+CREATE INDEX  idx_rec_tipo_data ON tb_recibos (rec_tipo, data);
+
+
+
+-- -----------------------------------------------------------------------
+
+
+
+/* ============================
+   1) ALUNOS
+   ============================ */
+   drop table if exists tb_alunos;
+CREATE TABLE IF NOT EXISTS tb_alunos (
+  alu_id       INT AUTO_INCREMENT PRIMARY KEY,
+  alu_nome  VARCHAR(120) NOT NULL,
+  alu_num_processo int not null,
+  alu_numero   VARCHAR(40)  NULL,                 -- nº interno/matrícula (opcional)
+  alu_turma    VARCHAR(80)  NULL,
+  alu_ano       int not null,
+  alu_status   ENUM('ativo','inativo') NOT NULL DEFAULT 'ativo',
+  createdAt    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX idx_aluno_nome ON tb_alunos (alu_nome);
+
+
+/* ============================
+   2) CONFIGURAÇÕES (preço do almoço, etc.)
+   ============================ */
+CREATE TABLE IF NOT EXISTS tb_configuracoes (
+  cfg_id       INT AUTO_INCREMENT PRIMARY KEY,
+  cfg_chave    VARCHAR(50) NOT NULL UNIQUE,       -- ex.: 'preco_almoco'
+  cfg_valor_s  VARCHAR(255) NULL,
+  cfg_valor_n  DECIMAL(10,2) NULL,
+  createdAt    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+/* opcional: define um preço padrão inicial */
+INSERT INTO tb_configuracoes (cfg_chave, cfg_valor_n)
+VALUES ('preco_almoco', 0.00)
+ON DUPLICATE KEY UPDATE cfg_valor_n = cfg_valor_n;
+
+
+/* ============================
+   3) ALMOÇOS (um registro por dia)
+   ============================ */
+CREATE TABLE IF NOT EXISTS tb_almocos (
+  alm_id     INT AUTO_INCREMENT PRIMARY KEY,
+  alm_data   DATE NOT NULL UNIQUE,                -- um almoço por dia
+  alm_preco  DECIMAL(10,2) NOT NULL,             -- “carimbo” do preço no dia
+  alm_status ENUM('aberto','fechado') NOT NULL DEFAULT 'aberto',
+  createdAt  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX  idx_alm_data ON tb_almocos (alm_data);
+
+
+/* ============================
+   4) MARCAÇÃO: aluno x almoço-do-dia
+      (1 marcação por aluno em cada dia)
+   ============================ */
+CREATE TABLE IF NOT EXISTS tb_alunos_almocos (
+  ala_id        INT AUTO_INCREMENT PRIMARY KEY,
+  ala_fk_aluno  INT NOT NULL,
+  ala_fk_almoco INT NOT NULL,
+  ala_status    ENUM('Marcado','Pago','Cancelado') NOT NULL DEFAULT 'Marcado',
+  ala_valor     DECIMAL(10,2) NOT NULL,          -- preço carimbado na marcação
+  ala_obs       VARCHAR(255) NULL,
+  ala_criado_em DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ala_pago_em   DATETIME NULL,
+  CONSTRAINT fk_ala_aluno  FOREIGN KEY (ala_fk_aluno)  REFERENCES tb_alunos(alu_id)   ON DELETE CASCADE,
+  CONSTRAINT fk_ala_almoco FOREIGN KEY (ala_fk_almoco) REFERENCES tb_almocos(alm_id) ON DELETE CASCADE,
+  UNIQUE KEY uk_almoco_aluno_unico (ala_fk_aluno, ala_fk_almoco)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE INDEX  idx_ala_status ON tb_alunos_almocos (ala_status);
+
+
+/* ============================
+   5) AJUSTES EM RECIBOS (emitir recibo de almoço)
+   - usamos rec_cliente_nome para guardar o nome do aluno no recibo
+   - ligamos opcionalmente o recibo à marcação (ala_id)
+   ============================ */
+ALTER TABLE tb_recibos
+  MODIFY rec_total DECIMAL(10,2) NOT NULL;
+
+ALTER TABLE tb_recibos
+  ADD COLUMN rec_fk_almoco    INT NULL AFTER rec_cliente_nome;
+
+-- se já existirem, remova as linhas acima e siga com a FK
+ALTER TABLE tb_recibos
+  ADD CONSTRAINT fk_rec_almoco
+  FOREIGN KEY (rec_fk_almoco) REFERENCES tb_alunos_almocos(ala_id)
+  ON DELETE SET NULL;
+
+
+
+
+-- -----
