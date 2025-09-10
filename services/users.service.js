@@ -155,6 +155,7 @@ module.exports = {
 
 
 		// ─── GET SINGLE USER ─────────────────────────────────────────────────────
+		// ─── GET SINGLE USER ─────────────────────────────────────────────────────
 		getUser: {
 			rest: "GET /users/:id",
 			params: { id: { type: "number", convert: true } },
@@ -164,19 +165,27 @@ module.exports = {
 
 				const uts = await UserTemplate.findAll({
 					where: { user_id: user.user_id },
-					include: [{ model: PermissionTemplate, as: "permissionTemplates", attributes: ["template_code", "template_label"] }]
+					include: [{
+						model: PermissionTemplate,
+						as: "permissionTemplate", // <-- alias CORRETO (singular)
+						attributes: ["template_code", "template_label"]
+					}]
 				});
 
 				return {
 					...user.toJSON(),
-					templates: uts.map(x => ({
-						template_code: x.dataValues.PermissionTemplate.template_code,
-						resource_type: x.resource_type,
-						resource_id: x.resource_id
-					}))
+					templates: uts
+						.map(ut => ({
+							template_code: ut.permissionTemplate?.template_code,  // <-- acesso alinhandado ao alias
+							template_label: ut.permissionTemplate?.template_label,
+							resource_type: ut.resource_type,
+							resource_id: ut.resource_id
+						}))
+						.filter(t => !!t.template_code) // evita entradas sem join (por segurança)
 				};
 			}
 		},
+
 		// ─── UPDATE FULL (admin / manage_users) ───────────────────────────────
 		updateUser: {
 			rest: "PUT /users/:id",

@@ -5,31 +5,18 @@ const DbService = require("moleculer-db");
 const SequelizeAdapter = require("moleculer-db-adapter-sequelize");
 const sequelize = require("../config/db");
 const { DataTypes } = require("sequelize");
-const Reciclagem = require("../models/reciclagem.model");
-
+const {
+  Categoria,
+  Tipo,
+  Material,
+  Movimentacao,
+  Reciclagem
+} = require("../models/index");
 module.exports = {
-	name: "categorias",
-	mixins: [DbService],
-	adapter: new SequelizeAdapter(sequelize, {
-		primaryKey: "cat_id",  // muda para o nome da PK das categorias
-		raw: true
-	}),
-	model: {
-		name: "categoria",
-		define: {
-			cat_id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
-			cat_nome: { type: DataTypes.STRING(50), allowNull: false }
-		},
-		options: {
-			tableName: "tb_categorias",
-			timestamps: false
-		}
-	},
-
-	settings: {
-		maxLimit: -1,
-		
-	},
+  name: "categorias",
+  mixins: [DbService],
+  adapter: new SequelizeAdapter(sequelize),
+  model: Categoria, // ⬅️ importante para o DbService
 
 	actions: {
 		// GET /api/categorias
@@ -120,28 +107,104 @@ module.exports = {
 			}
 		},
 
-		remove: {
-			rest: "DELETE /categorias/:id",
-			params: { id: { type: "number", convert: true } },
-			async handler(ctx) {
-				const { id } = ctx.params;
-				const rec = await this.adapter.findById(id);
-				if (!rec) throw new Error("Categoria não encontrada.");
+	  remove: { // ⬅️ o nome precisa ser "remove" (bate com o log)
+      rest: "DELETE /categorias/:id",
+      params: { id: { type: "number", convert: true } },
+      async handler(ctx) {
+        const { id } = ctx.params;
 
-				const oldData = rec;
-				await this.adapter.removeById(id);
+        return await sequelize.transaction(async (tx) => {
+          // 1) Carrega a categoria
+          const categoriaInst = await Categoria.findByPk(id, { transaction: tx });
+          if (!categoriaInst) throw new Error("Categoria não encontrada.");
+          const oldCategoria = categoriaInst.toJSON();
 
-				await Reciclagem.create({
-					reci_table: "tb_categorias",
-					reci_record_id: id,
-					reci_action: "delete",
-					reci_data_antiga: oldData,
-					reci_data_nova: null,
-					reci_fk_user: ctx.meta.user?.id || null
-				});
+          // 2) Carrega todos os tipos da categoria
+          const tipos = await Tipo.findAll({
+            where: { tipo_fk_categoria: id },
+            raw: true,
+            transaction: tx
+          });
 
-				return { message: "Categoria enviada para reciclagem." };
-			}
-		}
-	}
+          let totalMateriaisRemovidos = 0;
+
+          // 3) Para cada tipo, tratar materiais + reciclar tipo
+          for (const t of tipos) {
+            // 3.1) Buscar materiais do tipo
+            const materiais = await Material.findAll({
+              where: { mat_fk_tipo: t.tipo_id },
+              raw: true,
+              transaction: tx
+            });
+
+            // 3.2) Para cada material: reciclagem + movimentação
+            for (const mat of materiais) {
+              await Reciclagem.create({
+                reci_table:       "tb_materiais",
+                reci_record_id:   mat.mat_id,
+                reci_action:      "delete",
+                reci_data_antiga: mat,
+                reci_data_nova:   null,
+                reci_fk_user:     ctx.meta.user?.id || ctx.meta.user?.user_id || null
+              }, { transaction: tx });
+
+              await Movimentacao.create({
+                mov_fk_material:   mat.mat_id,
+                mov_material_nome: mat.mat_nome,
+                mov_tipo_nome:     t.tipo_nome,
+                mov_tipo:          "saida",
+                mov_quantidade:    mat.mat_quantidade_estoque,
+                mov_preco:         mat.mat_preco,
+                mov_descricao:     `Material ${mat.mat_nome} removido ao apagar categoria ${oldCategoria.cat_nome} (tipo ${t.tipo_nome})`,
+                mov_fk_requisicao: null
+              }, { transaction: tx });
+            }
+
+            // 3.3) Apagar materiais do tipo
+            if (materiais.length) {
+              await Material.destroy({ where: { mat_fk_tipo: t.tipo_id }, transaction: tx });
+              totalMateriaisRemovidos += materiais.length;
+            }
+
+            // 3.4) Reciclagem do tipo
+            await Reciclagem.create({
+              reci_table:       "tb_tipos",
+              reci_record_id:   t.tipo_id,
+              reci_action:      "delete",
+              reci_data_antiga: t,
+              reci_data_nova:   null,
+              reci_fk_user:     ctx.meta.user?.id || ctx.meta.user?.user_id || null
+            }, { transaction: tx });
+          }
+
+          // 4) Apagar tipos da categoria
+          if (tipos.length) {
+            await Tipo.destroy({ where: { tipo_fk_categoria: id }, transaction: tx });
+          }
+
+          // 5) Reciclagem da categoria
+          await Reciclagem.create({
+            reci_table:       "tb_categorias",
+            reci_record_id:   id,
+            reci_action:      "delete",
+            reci_data_antiga: oldCategoria,
+            reci_data_nova:   null,
+            reci_fk_user:     ctx.meta.user?.id || ctx.meta.user?.user_id || null
+          }, { transaction: tx });
+
+          // 6) Remover a categoria
+          await categoriaInst.destroy({ transaction: tx });
+
+          // 7) Limpa cache do serviço (DbService)
+          await this.clearCache();
+
+          return {
+            success: true,
+            message: "Categoria, seus tipos e materiais enviados para reciclagem e removidos com sucesso.",
+            removidos: { materiais: totalMateriaisRemovidos, tipos: tipos.length, categorias: 1 }
+          };
+        });
+      }
+    }
+  }
 };

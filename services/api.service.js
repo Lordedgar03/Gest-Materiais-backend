@@ -2,6 +2,7 @@
 
 const ApiGateway = require("moleculer-web");
 const jwt = require("jsonwebtoken");
+const { actions } = require("./almocos.service");
 
 module.exports = {
 	name: "api",
@@ -102,30 +103,32 @@ module.exports = {
 					// ============================================================
 
 					// ---- Configurações de Almoço ----
-					"GET    /configuracoes":            { action: "configuracoes.list",    module: "venda", actionName: "visualizar" },
-					"GET    /configuracoes/:chave":     { action: "configuracoes.get",     module: "venda", actionName: "visualizar" },
-					"GET    /configuracoes/value/:chave":{ action: "configuracoes.getValue", module: "venda", actionName: "visualizar" },
-					"POST   /configuracoes":            { action: "configuracoes.upsert",  module: "venda", actionName: "editar" },
-					"POST   /configuracoes/bulk":       { action: "configuracoes.bulkUpsert", module: "venda", actionName: "editar" },
+					"GET    /configuracoes": { action: "configuracoes.list", module: "configurar", actionName: "visualizar" },
+					"GET    /configuracoes/:chave": { action: "configuracoes.get", module: "configurar", actionName: "visualizar" },
+					"GET    /configuracoes/value/:chave": { action: "configuracoes.getValue", module: "configurar", actionName: "visualizar" },
+					"POST   /configuracoes": { action: "configuracoes.upsert", module: "configurar", actionName: "editar" },
+					"POST   /configuracoes/bulk": { action: "configuracoes.bulkUpsert", module: "configurar", actionName: "editar" },
 
 					// ---- Almoços (preço + relatórios) ----
-					"PATCH  /almocos/preco":            { action: "almocos.atualizarPrecoPadrao", module: "venda", actionName: "editar" },
-					"GET    /almocos/preco-padrao":     { action: "almocos.precoPadrao",          module: "venda", actionName: "visualizar" },
-					"GET    /almocos/relatorios/por-data":   { action: "almocos.relatorioPorData",   module: "venda", actionName: "visualizar" },
-					"GET    /almocos/relatorios/intervalo":  { action: "almocos.relatorioIntervalo", module: "venda", actionName: "visualizar" },
-					"GET    /almocos/relatorios/mensal":     { action: "almocos.relatorioMensal",    module: "venda", actionName: "visualizar" },
-					"GET    /almocos/relatorios/hoje":       { action: "almocos.relatorioHoje",      module: "venda", actionName: "visualizar" },
+					"PUT   /almocos/preco": { action: "almocos.atualizarPrecoPadrao", module: "almoço", actionName: "editar" },
+					"GET   /almocos/preco-padrao": { action: "almocos.precoPadrao", module: "almoço", actionName: "visualizar" },
+					"GET   /almocos/relatorios/por-data": { action: "almocos.relatorioPorData", module: "alomoço", actionName: "visualizar" },
+					"GET   /almocos/relatorios/intervalo": { action: "almocos.relatorioIntervalo", module: "almoço", actionName: "visualizar" },
+					"GET   /almocos/relatorios/mensal": { action: "almocos.relatorioMensal", module: "almoço", actionName: "visualizar" },
+					"GET   /almocos/relatorios/hoje": { action: "almocos.relatorioHoje", module: "almoço", actionName: "visualizar" },
+
 
 					// ---- Marcações de Almoço ----
-					"POST   /marcacoes":             { action: "marcacoes.marcar",     module: "venda", actionName: "criar" },
-					"PATCH  /marcacoes/:id":         { action: "marcacoes.atualizar",  module: "venda", actionName: "editar" },
-					"GET    /marcacoes/marcados":    { action: "marcacoes.marcados",   module: "venda", actionName: "visualizar" },
+					"POST   /marcacoes": { action: "marcacoes.marcar", module: "almoço", actionName: "criar" },
+					"POST /marcacoes/bulk":{action:"marcacoes.bulk", module:"almoço", actionName: "criar"},
+					"PUT  /marcacoes/:id": { action: "marcacoes.atualizar", module: "almoço", actionName: "editar" },
+					"GET    /marcacoes/marcados": { action: "marcacoes.marcados", module: "almoço", actionName: "visualizar" },
 
 					// ---- Alunos (base do módulo Almoço) ----
-					"GET    /alunos":        { action: "alunos.list",   module: "venda", actionName: "visualizar" },
-					"POST   /alunos":        { action: "alunos.create", module: "venda", actionName: "criar" },
-					"PATCH  /alunos/:id":    { action: "alunos.update", module: "venda", actionName: "editar" },
-					"PATCH  /alunos/:id/status": { action: "alunos.setStatus", module: "venda", actionName: "editar" },
+					"GET    /alunos": { action: "alunos.list", module: "aluno", actionName: "visualizar" },
+					"POST   /alunos": { action: "alunos.create", module: "aluno", actionName: "criar" },
+					"PUT  /alunos/:id": { action: "alunos.update", module: "aluno", actionName: "editar" },
+					"DELETE /alunos/:id": { action: "alunos.remove", module: "aluno", actionName: "eliminar" },
 				},
 				bodyParsers: { json: true, urlencoded: { extended: true } },
 				cors: { origin: "*", methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"] }
