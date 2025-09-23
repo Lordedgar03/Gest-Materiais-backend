@@ -26,7 +26,10 @@ module.exports = {
 			mat_fk_tipo: { type: DataTypes.INTEGER, allowNull: false },
 			mat_localizacao: { type: DataTypes.STRING(255), allowNull: false },
 			mat_vendavel: { type: DataTypes.ENUM("SIM", "NAO"), allowNull: false, defaultValue: "SIM" },
-			mat_status: { type: DataTypes.ENUM("ativo", "inativo"), defaultValue: "ativo" }
+			mat_status: { type: DataTypes.ENUM("ativo", "inativo"), defaultValue: "ativo" },
+
+			// >>> NOVO CAMPO
+			mat_consumivel: { type: DataTypes.ENUM("sim", "não"), allowNull: false, defaultValue: "não" }
 		},
 		options: {
 			tableName: "tb_materiais",
@@ -55,10 +58,19 @@ module.exports = {
 				mat_estoque_minimo: { type: "number", convert: true },
 				mat_fk_tipo: { type: "number", convert: true },
 				mat_localizacao: { type: "string", min: 1 },
-				mat_vendavel: { type: "enum", values: ["SIM", "NAO"] }
+				mat_vendavel: { type: "enum", values: ["SIM", "NAO"], optional: true },
+
+				// >>> validação do novo campo (opcional no create; default aplicado)
+				mat_consumivel: { type: "enum", values: ["sim", "não"], optional: true }
 			},
 			async handler(ctx) {
-				const data = { ...ctx.params, mat_vendavel: ctx.params.mat_vendavel || "SIM" };
+				const data = {
+					...ctx.params,
+					mat_vendavel: ctx.params.mat_vendavel || "SIM",
+					// garante default consistente caso não venha do cliente
+					mat_consumivel: ctx.params.mat_consumivel || "não"
+				};
+
 				const novo = await this.adapter.insert(data);
 				await this.clearCache();
 
@@ -70,8 +82,8 @@ module.exports = {
 				if (novo.mat_quantidade_estoque > 0) {
 					await Movimentacao.create({
 						mov_fk_material: novo.mat_id,
-						mov_material_nome: novo.mat_nome,    // nome do material
-						mov_tipo_nome: tipoNome,         // nome do tipo
+						mov_material_nome: novo.mat_nome,
+						mov_tipo_nome: tipoNome,
 						mov_tipo: "entrada",
 						mov_quantidade: novo.mat_quantidade_estoque,
 						mov_preco: novo.mat_preco,
@@ -97,7 +109,10 @@ module.exports = {
 				mat_fk_tipo: { type: "number", convert: true, optional: true },
 				mat_localizacao: { type: "string", optional: true },
 				mat_vendavel: { type: "enum", values: ["SIM", "NAO"], optional: true },
-				mat_status: { type: "enum", values: ["ativo", "inativo"], optional: true }
+				mat_status: { type: "enum", values: ["ativo", "inativo"], optional: true },
+
+				// >>> campo novo também no update
+				mat_consumivel: { type: "enum", values: ["sim", "não"], optional: true }
 			},
 			async handler(ctx) {
 				const { id } = ctx.params;
@@ -111,7 +126,9 @@ module.exports = {
 					"mat_nome", "mat_descricao", "mat_preco",
 					"mat_quantidade_estoque", "mat_estoque_minimo",
 					"mat_fk_tipo", "mat_localizacao",
-					"mat_vendavel", "mat_status"
+					"mat_vendavel", "mat_status",
+					// >>> incluir no set de campos atualizáveis
+					"mat_consumivel"
 				].forEach(key => {
 					if (ctx.params[key] !== undefined) updateData[key] = ctx.params[key];
 				});
@@ -148,7 +165,6 @@ module.exports = {
 			}
 		},
 
-		// Apagar (marca inativo + remove) material
 		// Apagar (descontar estoque ou remover) material — exige quantidade e motivo
 		delete: {
 			rest: "DELETE /materiais/:id",
@@ -184,11 +200,11 @@ module.exports = {
 						mov_tipo: "saida",
 						mov_quantidade: quantidade,
 						mov_preco: inst.mat_preco,
-						mov_descricao: descricao,            // <-- motivo registrado aqui
+						mov_descricao: descricao,
 						mov_fk_requisicao: null
 					}, { transaction: tx });
 
-					// 5) Auditoria/reciclagem
+					// 5) Auditoria/reciclagem (toJSON já inclui mat_consumivel)
 					const oldData = inst.toJSON();
 					const newQty = estoqueAtual - quantidade;
 					const newData = { ...oldData, mat_quantidade_estoque: newQty };
@@ -196,7 +212,7 @@ module.exports = {
 					await Reciclagem.create({
 						reci_table: "tb_materiais",
 						reci_record_id: id,
-						reci_action: "delete",               // mantendo a semântica anterior
+						reci_action: "delete",
 						reci_data_antiga: oldData,
 						reci_data_nova: newData,
 						reci_fk_user: ctx.meta.user?.id || null

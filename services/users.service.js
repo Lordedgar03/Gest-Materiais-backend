@@ -6,6 +6,7 @@ const sequelize = require("../config/db");
 const { Op } = require("sequelize");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const { v4: uuidv4 } = require("uuid");
 
 // Centralized models with associations
 const {
@@ -15,6 +16,7 @@ const {
 	PermissionTemplate,
 	UserTemplate,
 	Log,
+	TokenBlacklist, // login verificar token expirado para não repetir, reiniciar após ......... 
 	Reciclagem
 } = require("../models/index");
 
@@ -391,40 +393,44 @@ module.exports = {
 		// ─── LOGIN ───────────────────────────────────────────────────────────────
 		loginUser: {
 			rest: "POST /users/login",
-			params: { user_email: { type: "email" }, user_senha: { type: "string", min: 6 } },
+			params: {
+				user_email: { type: "email" },
+				user_senha: { type: "string", min: 6 }
+			},
 			async handler(ctx) {
 				const { user_email, user_senha } = ctx.params;
-				const user = await this.adapter.findOne({ where: { user_email } });
-				if (!user || !await bcrypt.compare(user_senha, user.user_senha))
-					throw new Error("Credenciais inválidas.");
 
-				// 1) Buscar templates COM O CÓDIGO
+				const user = await this.adapter.findOne({ where: { user_email } });
+				if (!user || !(await bcrypt.compare(user_senha, user.user_senha))) {
+					throw new Error("Credenciais inválidas.");
+				}
+
+				// 1) Templates com o código
 				const uts = await UserTemplate.findAll({
 					where: { user_id: user.user_id },
-					include: [{
-						model: PermissionTemplate,
-						as: "permissionTemplate",
-						attributes: ["template_code"]
-					}]
+					include: [
+						{
+							model: PermissionTemplate,
+							as: "permissionTemplate",
+							attributes: ["template_code"]
+						}
+					]
 				});
-				const templates = uts.map(ut => ({
+
+				const templates = uts.map((ut) => ({
 					template_code: ut.permissionTemplate.template_code,
 					resource_type: ut.resource_type,
 					resource_id: ut.resource_id
 				}));
 
+				// 2) Roles
 				const urs = await UserRole.findAll({
 					where: { user_id: user.user_id },
-					include: [{
-						model: Role,
-						as: "loginRole",         // <— aqui
-						attributes: ["role_name"]
-					}]
+					include: [{ model: Role, as: "loginRole", attributes: ["role_name"] }]
 				});
-				// Extrai a lista de nomes de roles
-				const roles = urs.map(ur => ur.loginRole.role_name);
+				const roles = urs.map((ur) => ur.loginRole.role_name);
 
-				// 3) Monta payload…
+				// 3) Payload do JWT
 				const payload = {
 					user_id: user.user_id,
 					user_nome: user.user_nome,
@@ -432,12 +438,16 @@ module.exports = {
 					templates
 				};
 
+				// 4) 🔐 Token único: adiciona jti (UUID)
 				const token = jwt.sign(payload, process.env.JWT_SECRET || "segredo_muito_forte", {
-					expiresIn: process.env.JWT_EXPIRES_IN || "1h"
+					expiresIn: process.env.JWT_EXPIRES_IN || "1h",
+					jwtid: uuidv4() // <- garante que NUNCA repete
 				});
+
 				return { message: "Login ok", token, roles, templates };
 			}
 		},
+
 		// ─── LOGOUT ──────────────────────────────────────────────────────────────
 		logout: {
 			rest: "POST /users/logout",
@@ -445,7 +455,11 @@ module.exports = {
 			async handler(ctx) {
 				const token = ctx.meta.token;
 				if (!token) throw new Error("Sem token para revogar.");
-				await ctx.call("blacklist.add", { token, expiresAt: new Date(ctx.meta.user.exp * 1000).toISOString() });
+				// opcional: salvar exp para GC da blacklist
+				await ctx.call("blacklist.add", {
+					token,
+					expiresAt: new Date(ctx.meta.user.exp * 1000).toISOString()
+				});
 				return { message: "Logout ok" };
 			}
 		},
@@ -454,8 +468,10 @@ module.exports = {
 		listRecycleUsers: {
 			rest: "GET /users/recycle",
 			async handler() {
-				return await Reciclagem.findAll({ where: { reci_table: "tb_users", reci_action: "delete" } });
+				return await Reciclagem.findAll({
+					where: { reci_table: "tb_users", reci_action: "delete" }
+				});
 			}
 		}
 	}
-};
+}

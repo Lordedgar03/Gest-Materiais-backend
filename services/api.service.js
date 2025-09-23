@@ -80,6 +80,7 @@ module.exports = {
 					"POST   /vendas/:id/desconto": { action: "vendas.desconto", module: "venda", actionName: "criar" },
 					"POST   /vendas/:id/pagar": { action: "vendas.pagar", module: "venda", actionName: "criar" },
 					"POST   /vendas/:id/cancelar": { action: "vendas.cancelar", module: "venda", actionName: "eliminar" },
+					"POST /vendas/requisitar":{action:"vendasService.requisitar", module:"venda", actionName:"criar"},
 
 					// ===== Caixa (um por dia) =====
 					"GET    /caixas/aberto": { action: "caixas.aberto", module: "venda", actionName: "visualizar" },
@@ -120,7 +121,7 @@ module.exports = {
 
 					// ---- Marcações de Almoço ----
 					"POST   /marcacoes": { action: "marcacoes.marcar", module: "almoço", actionName: "criar" },
-					"POST /marcacoes/bulk":{action:"marcacoes.bulk", module:"almoço", actionName: "criar"},
+					"POST /marcacoes/bulk": { action: "marcacoes.bulk", module: "almoço", actionName: "criar" },
 					"PUT  /marcacoes/:id": { action: "marcacoes.atualizar", module: "almoço", actionName: "editar" },
 					"GET    /marcacoes/marcados": { action: "marcacoes.marcados", module: "almoço", actionName: "visualizar" },
 
@@ -129,7 +130,16 @@ module.exports = {
 					"POST   /alunos": { action: "alunos.create", module: "aluno", actionName: "criar" },
 					"PUT  /alunos/:id": { action: "alunos.update", module: "aluno", actionName: "editar" },
 					"DELETE /alunos/:id": { action: "alunos.remove", module: "aluno", actionName: "eliminar" },
+
+					// ===== Relatórios =====
+					"GET  relatorios/materiais/detalhado": { action: "relatorio.materiaisDetalhado", module: "relatorio", actionName: "visualizar" },
+  "GET  relatorios/estoque/movimentacoes": { action: "relatorio.estoqueMovimentacoes", module: "relatorio", actionName: "visualizar" },
+  "GET  relatorios/requisicoes": { action: "relatorio.requisicoesResumo", module: "relatorio", actionName: "visualizar" },
+  "GET  relatorios/vendas": { action: "relatorio.vendasResumo", module: "relatorio", actionName: "visualizar" },
+  "GET  relatorios/caixa": { action: "relatorio.caixaResumo", module: "relatorio", actionName: "visualizar" },
 				},
+
+
 				bodyParsers: { json: true, urlencoded: { extended: true } },
 				cors: { origin: "*", methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"] }
 			}
@@ -170,16 +180,26 @@ module.exports = {
 
 		// 2) Autoriza: usa o serviço de permissões genérico
 		async authorize(ctx, route, req) {
-			// Só proteger rotas em /api
 			if (route.path !== "/api") return;
 
-			// Verifica se o alias foi configurado corretamente
 			const alias = req.$alias;
 			if (!alias || !alias.module || !alias.actionName) {
 				throw new Error("Rota mal configurada: falta module/actionName.");
 			}
 
-			// Mapa PT → códigos da sua ACL
+			// ===== BYPASS PARA ADMIN =====
+			const u = ctx.meta.user || {};
+			const isAdmin =
+				u.is_admin === true ||
+				(Array.isArray(u.roles) && u.roles.includes("admin"));
+
+			// (A) Se a rota é de relatório: só ADMIN acessa
+			if (alias.module === "relatorio") {
+				if (!isAdmin) throw new Error("Acesso negado: relatórios apenas para administradores.");
+				return; // admin passa sem consultar ACL/BD
+			}
+
+			// ===== Demais módulos seguem a ACL normalmente =====
 			const actionMap = {
 				visualizar: "view",
 				criar: "create",
@@ -194,35 +214,24 @@ module.exports = {
 
 			const { module, actionName } = alias;
 			const actionCode = actionMap[actionName];
+			if (!actionCode) return; // ex.: logout/self
 
-			// Se for logout (actionCode null) não faz checagem de permissão
-			if (!actionCode) return;
-
-			// Garante que o usuário foi autenticado
 			if (!ctx.meta.user || !ctx.meta.user.user_id) {
 				throw new Error("Usuário não autenticado.");
 			}
-			const userId = ctx.meta.user.user_id;
 
-			// Pega o ID do recurso usando req.$params (sempre existe, mas pode vir vazio)
 			const params = req.$params || {};
-			const resourceId = params.id
-				? Number(params.id)
-				: null;
+			const resourceId = params.id ? Number(params.id) : null;
 
-			// Chama seu serviço de ACL
 			const ok = await ctx.call("permissions.check", {
-				userId,
+				userId: ctx.meta.user.user_id,
 				resourceType: module,
 				actionCode,
 				resourceId
 			});
 
-			if (!ok) {
-				throw new Error(`Acesso negado: ${module}:${actionName}`);
-			}
+			if (!ok) throw new Error(`Acesso negado: ${module}:${actionName}`);
 		}
-
 
 
 	},

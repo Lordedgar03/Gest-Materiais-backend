@@ -50,7 +50,13 @@ const Material = sequelize.define(
       type: DataTypes.ENUM("ativo", "inativo"),
       allowNull: false,
       defaultValue: "ativo"
+    },
+    mat_consumivel: {
+      type: DataTypes.ENUM("sim", "não"),
+      allowNull: false,
+      defaultValue: "não"
     }
+
   },
   {
     tableName: "tb_materiais",
