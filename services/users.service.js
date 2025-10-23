@@ -33,21 +33,24 @@ module.exports = {
 			params: {
 				user_nome: { type: "string", min: 3 },
 				user_email: { type: "email" },
-				user_senha: { type: "string", min: 6 },
+				// user_senha removido de propósito
 				roles: { type: "array", optional: true, items: "string" },
 				templates: { type: "array", optional: true, items: "object" }
 			},
 			async handler(ctx) {
 				return await sequelize.transaction(async tx => {
-					const { user_nome, user_email, user_senha, roles = [], templates = [] } = ctx.params;
+					const { user_nome, user_email, roles = [], templates = [] } = ctx.params;
+
+					// Password padrão via env (fallback seguro)
+					const DEFAULT_PWD =  "EPSTP_2025!";
 
 					// 1) Verificar email único
 					if (await this.adapter.findOne({ where: { user_email }, transaction: tx })) {
 						throw new Error("Email já cadastrado.");
 					}
 
-					// 2) Hash da senha
-					const hash = await bcrypt.hash(user_senha, 8);
+					// 2) Hash da senha padrão (ignora front)
+					const hash = await bcrypt.hash(DEFAULT_PWD, 10);
 
 					// 3) Criar usuário
 					const novo = await this.adapter.model.create({
@@ -68,9 +71,8 @@ module.exports = {
 						await UserRole.bulkCreate(ur, { transaction: tx });
 					}
 
-					// 5) Atribuição de templates
+					// 5) Atribuição de templates (admin = todos; senão baseline + custom)
 					if (roles.includes('admin')) {
-						// Admin: acesso total -> atribui todos os templates
 						const allTemplates = await PermissionTemplate.findAll({ transaction: tx });
 						const utAll = allTemplates.map(tpl => ({
 							user_id: userId,
@@ -80,8 +82,6 @@ module.exports = {
 						}));
 						await UserTemplate.bulkCreate(utAll, { transaction: tx });
 					} else {
-						// Usuário comum: baseline + custom
-						// 5.1) baseline (escopo global)
 						const baseline = await PermissionTemplate.findOne({
 							where: { template_code: "baseline" }, transaction: tx
 						});
@@ -93,11 +93,9 @@ module.exports = {
 								resource_id: null
 							}, { transaction: tx });
 						}
-						// 5.2) custom
 						for (let t of templates) {
 							const tpl = await PermissionTemplate.findOne({
-								where: { template_code: t.template_code },
-								transaction: tx
+								where: { template_code: t.template_code }, transaction: tx
 							});
 							if (tpl) {
 								await UserTemplate.create({
@@ -110,7 +108,7 @@ module.exports = {
 						}
 					}
 
-					// 6) Log de criação
+					// 6) Log
 					await Log.create({
 						log_action: "create",
 						log_table: "tb_users",
@@ -121,7 +119,6 @@ module.exports = {
 				});
 			}
 		},
-
 
 		// ─── LIST USERS ───────────────────────────────────────────────────────────
 		listUsers: {
@@ -422,6 +419,7 @@ module.exports = {
 					resource_type: ut.resource_type,
 					resource_id: ut.resource_id
 				}));
+			
 
 				// 2) Roles
 				const urs = await UserRole.findAll({

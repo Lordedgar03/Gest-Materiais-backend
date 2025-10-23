@@ -5,7 +5,7 @@ const SequelizeAdapter = require("moleculer-db-adapter-sequelize");
 const sequelize = require("../config/db");
 const { DataTypes /*, Op*/ } = require("sequelize");
 
-// Novos models (index deve exportar esses nomes)
+// Models exportados
 const {
   Requisicao,
   Movimentacao,
@@ -21,7 +21,6 @@ module.exports = {
   name: "requisicoes",
   mixins: [DbService],
 
-  // O serviço é baseado no cabeçalho (tb_requisicoes)
   adapter: new SequelizeAdapter(sequelize, {
     primaryKey: "req_id",
     raw: true
@@ -32,7 +31,20 @@ module.exports = {
       req_id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
       req_codigo: { type: DataTypes.STRING(30), allowNull: false, unique: true },
       req_fk_user: { type: DataTypes.INTEGER, allowNull: false },
-      req_status: { type: DataTypes.ENUM("Pendente", "Aprovada", "Atendida", "Em Uso", "Parcial", "Devolvida", "Rejeitada", "Cancelada"), allowNull: false, defaultValue: "Pendente" },
+      req_status: {
+        type: DataTypes.ENUM(
+          "Pendente",
+          "Aprovada",
+          "Atendida",
+          "Em Uso",
+          "Parcial",
+          "Devolvida",
+          "Rejeitada",
+          "Cancelada"
+        ),
+        allowNull: false,
+        defaultValue: "Pendente"
+      },
       req_date: { type: DataTypes.DATE, allowNull: false, defaultValue: DataTypes.NOW },
       req_needed_at: { type: DataTypes.DATEONLY, allowNull: true },
       req_local_entrega: { type: DataTypes.STRING(120), allowNull: true },
@@ -51,10 +63,7 @@ module.exports = {
 
   actions: {
     /**
-     * GET /requisicoes
-     * Query:
-     *  - includeItems=true para trazer itens
-     *  - includeDecisions=true para trazer decisões
+     * GET /requisicoes?includeItems=true&includeDecisions=true
      */
     list: {
       rest: "GET /requisicoes",
@@ -71,6 +80,7 @@ module.exports = {
           ctx.meta.user.permissoes.some(p => p.modulo === "requisicoes" && p.acao === "editar");
 
         const { allowed, hasGlobal } = this._getAllowedCategoryIds(ctx);
+        const hasSales = this._hasSalesPermission(ctx);
 
         const mergeById = (a = [], b = []) => {
           const map = new Map();
@@ -88,10 +98,12 @@ module.exports = {
           return Array.from(map.values());
         };
 
+        // Cabeçalhos visíveis (escopos)
         let headers = [];
         if (hasGlobal || canEdit) {
           headers = await this.adapter.find({ query: {}, sort: ["-req_id"] });
         } else if (allowed && allowed.size > 0) {
+          // Por categorias permitidas
           const catArr = [...allowed];
           const tipos = await Tipo.findAll({ where: { tipo_fk_categoria: catArr }, raw: true });
           const tipoIds = tipos.map(t => t.tipo_id).filter(Boolean);
@@ -112,14 +124,32 @@ module.exports = {
             ? await this.adapter.find({ query: { req_id: reqIds }, sort: ["-req_id"] })
             : [];
         } else {
+          // Sem poderes de gestão: por base só as minhas
           headers = await this.adapter.find({ query: { req_fk_user: userId }, sort: ["-req_id"] });
         }
 
-        // >>> Sempre incluir as minhas
+        // Extra: se tiver manage_sales (sem ser global/editor), incluir requisições com itens vendáveis
+        if (hasSales && !(hasGlobal || canEdit)) {
+          const vendaveis = await Material.findAll({
+            where: { mat_vendavel: ["Sim", "SIM", "sim"] },
+            raw: true
+          });
+          const vendavelIds = vendaveis.map(m => m.mat_id).filter(Boolean);
+          if (vendavelIds.length) {
+            const itensVend = await RequisicaoItem.findAll({ where: { rqi_fk_material: vendavelIds }, raw: true });
+            const reqVendIds = [...new Set(itensVend.map(i => i.rqi_fk_requisicao).filter(Boolean))];
+            if (reqVendIds.length) {
+              const salesHeaders = await this.adapter.find({ query: { req_id: reqVendIds }, sort: ["-req_id"] });
+              headers = mergeById(headers, salesHeaders);
+            }
+          }
+        }
+
+        // Inclui SEMPRE as minhas
         const myHeaders = await this.adapter.find({ query: { req_fk_user: userId }, sort: ["-req_id"] });
 
         const toPlain = (arr = []) => (arr || []).map(h => {
-          try { if (h && typeof h.toJSON === "function") return h.toJSON(); } catch (e) { }
+          try { if (h && typeof h.toJSON === "function") return h.toJSON(); } catch (e) { /* ignore */ }
           return h;
         });
 
@@ -132,16 +162,26 @@ module.exports = {
           const itens = reqIds.length
             ? await RequisicaoItem.findAll({ where: { rqi_fk_requisicao: reqIds }, raw: true })
             : [];
-          itensByReq = itens.reduce((acc, it) => { (acc[it.rqi_fk_requisicao] ||= []).push(it); return acc; }, {});
+          itensByReq = itens.reduce((acc, it) => {
+            (acc[it.rqi_fk_requisicao] ||= []).push(it);
+            return acc;
+          }, {});
         }
 
         // Decisões
         let decisByReq = {};
         if (ctx.params.includeDecisions) {
           const decis = reqIds.length
-            ? await RequisicaoDecisao.findAll({ where: { dec_fk_requisicao: reqIds }, order: [["dec_data", "ASC"]], raw: true })
+            ? await RequisicaoDecisao.findAll({
+                where: { dec_fk_requisicao: reqIds },
+                order: [["dec_data", "ASC"]],
+                raw: true
+              })
             : [];
-          decisByReq = decis.reduce((acc, d) => { (acc[d.dec_fk_requisicao] ||= []).push(d); return acc; }, {});
+          decisByReq = decis.reduce((acc, d) => {
+            (acc[d.dec_fk_requisicao] ||= []).push(d);
+            return acc;
+          }, {});
         }
 
         const normalized = headersMerged.map(h => {
@@ -155,7 +195,7 @@ module.exports = {
           };
         });
 
-        // nomes
+        // Preenche nome do solicitante (se disponível)
         const preencherNomes = async (arr) => {
           if (!Array.isArray(arr) || arr.length === 0) return arr;
           const userIds = [...new Set(arr.map(h => h.req_fk_user).filter(Boolean))];
@@ -171,7 +211,9 @@ module.exports = {
           return arr.map(h => {
             const fk = h.req_fk_user ?? null;
             const nameFromDb = fk && usersById[fk] ? (usersById[fk].user_nome || usersById[fk].name || null) : null;
-            const nameFromMeta = (ctx.meta && ctx.meta.user && (ctx.meta.user.nome || ctx.meta.user.name)) ? (ctx.meta.user.nome || ctx.meta.user.name) : null;
+            const nameFromMeta = (ctx.meta && ctx.meta.user && (ctx.meta.user.nome || ctx.meta.user.name))
+              ? (ctx.meta.user.nome || ctx.meta.user.name)
+              : null;
             return { ...h, req_user_nome: h.req_user_nome ?? nameFromDb ?? h.user_nome ?? nameFromMeta ?? null };
           });
         };
@@ -182,7 +224,6 @@ module.exports = {
 
     /**
      * POST /requisicoes
-     * Cria cabeçalho e itens.
      */
     create: {
       rest: "POST /requisicoes",
@@ -206,7 +247,6 @@ module.exports = {
         const { req_fk_user, req_needed_at, req_local_entrega, req_justificativa, req_observacoes, itens } = ctx.params;
 
         return await sequelize.transaction(async tx => {
-          // 1) header
           const header = await this.adapter.model.create({
             req_codigo: "TEMP",
             req_fk_user,
@@ -220,11 +260,9 @@ module.exports = {
             updatedAt: new Date()
           }, { transaction: tx });
 
-          // 2) código
           const reqCodigo = `REQ-${String(header.req_id).padStart(6, "0")}`;
           await this.adapter.model.update({ req_codigo: reqCodigo }, { where: { req_id: header.req_id }, transaction: tx });
 
-          // 3) itens
           for (const it of itens) {
             await RequisicaoItem.create({
               rqi_fk_requisicao: header.req_id,
@@ -240,7 +278,7 @@ module.exports = {
             }, { transaction: tx });
           }
 
-          // nome de usuário (opcional)
+          // Nome do user (opcional)
           let userName = null;
           if (ctx?.meta?.user) {
             userName = ctx.meta.user.nome ?? ctx.meta.user.name ?? ctx.meta.user.user_nome ?? null;
@@ -250,7 +288,7 @@ module.exports = {
               const u = await User.findByPk(req_fk_user, { raw: true, transaction: tx });
               userName = u ? (u.user_nome || u.name || null) : null;
             } catch (err) {
-              this.logger.warn("[requisicoes.create] nao foi possivel buscar usuario para nome:", err.message || err);
+              this.logger.warn("[requisicoes.create] nao foi possivel buscar usuario:", err.message || err);
             }
           }
 
@@ -258,11 +296,7 @@ module.exports = {
           return {
             success: true,
             message: "Requisição criada.",
-            data: {
-              ...header.toJSON(),
-              req_codigo: reqCodigo,
-              req_user_nome: userName
-            }
+            data: { ...header.toJSON(), req_codigo: reqCodigo, req_user_nome: userName }
           };
         });
       }
@@ -275,11 +309,13 @@ module.exports = {
       rest: "PUT /requisicoes/:id/status",
       params: {
         id: { type: "number", convert: true },
-        req_status: { type: "enum", values: ["Pendente", "Aprovada", "Atendida", "Em Uso", "Parcial", "Devolvida", "Rejeitada", "Cancelada"] }
+        req_status: {
+          type: "enum",
+          values: ["Pendente", "Aprovada", "Atendida", "Em Uso", "Parcial", "Devolvida", "Rejeitada", "Cancelada"]
+        }
       },
       async handler(ctx) {
         const { id, req_status } = ctx.params;
-
         const [affected] = await this.adapter.model.update({ req_status }, { where: { req_id: id } });
         if (!affected) throw new Error("Requisição não encontrada ou status inalterado.");
 
@@ -330,7 +366,32 @@ module.exports = {
             if (!material) throw new Error(`Material ${it.rqi_fk_material} não encontrado para o item ${it.rqi_id}.`);
             const tipo = await Tipo.findByPk(material.mat_fk_tipo, { raw: true, transaction: tx });
 
-            // saída
+            // ======= REGRA DE AUTORIZAÇÃO DE ATENDIMENTO =======
+            const hasSales = this._hasSalesPermission(ctx);
+            const { allowed, hasGlobal } = this._getAllowedCategoryIds(ctx);
+            const canEdit = Array.isArray(ctx.meta.user?.permissoes) &&
+              ctx.meta.user.permissoes.some(p => p.modulo === "requisicoes" && p.acao === "editar");
+            const catId = Number(tipo?.tipo_fk_categoria) || null;
+            const hasManageForCat = hasGlobal || (catId && allowed.has(catId));
+
+            const isVendavel = String(material.mat_vendavel).toUpperCase().trim() === "SIM";
+            if (isVendavel) {
+              // VENDÁVEL: só manage_sales atende (categoria não importa)
+              if (!hasSales) {
+                throw new Error(
+                  `Apenas utilizadores com a permissão 'manage_sales' podem atender materiais vendáveis. ` +
+                  `Item ${it.rqi_id} (${material.mat_nome}).`
+                );
+              }
+            } else {
+              // NÃO VENDÁVEL: precisa manage_category (ou global/editor)
+              if (!(hasManageForCat || canEdit)) {
+                throw new Error(`Sem permissão para atender materiais desta categoria (ID ${catId ?? "?"}).`);
+              }
+            }
+            // ======= FIM REGRA =======
+
+            // Saída do stock
             await Movimentacao.create({
               mov_fk_material: material.mat_id,
               mov_material_nome: material.mat_nome,
@@ -373,106 +434,118 @@ module.exports = {
      * POST /requisicoes/:id/devolver
      * Body: { itens: [{ rqi_id, quantidade, condicao?("Boa"|"Danificada"|"Perdida"), obs? }] }
      */
-    devolver: {
-      rest: "POST /requisicoes/:id/devolver",
-      params: {
-        id: { type: "number", convert: true },
-        itens: {
-          type: "array", min: 1, items: {
-            type: "object", props: {
-              rqi_id: { type: "number", convert: true, positive: true },
-              quantidade: { type: "number", convert: true, positive: true },
-              condicao: { type: "enum", values: ["Boa", "Danificada", "Perdida"], optional: true },
-              obs: { type: "string", optional: true }
-            }
+   devolver: {
+  rest: "POST /requisicoes/:id/devolver",
+  params: {
+    id: { type: "number", convert: true },
+    itens: {
+      type: "array", min: 1, items: {
+        type: "object", props: {
+          rqi_id: { type: "number", convert: true, positive: true },
+          quantidade: { type: "number", convert: true, positive: true },
+          condicao: { type: "enum", values: ["Boa", "Danificada", "Perdida"], optional: true },
+          obs: { type: "string", optional: true }
+        }
+      }
+    }
+  },
+  async handler(ctx) {
+    const { id, itens } = ctx.params;
+
+    // 👉 Permissões do usuário
+    const { allowed, hasGlobal } = this._getAllowedCategoryIds(ctx);
+
+    return await sequelize.transaction(async tx => {
+      const header = await this.adapter.model.findByPk(id, { transaction: tx });
+      if (!header) throw new Error("Requisição não encontrada.");
+
+      const rqiIds = itens.map(i => i.rqi_id);
+      const itensDb = await RequisicaoItem.findAll({
+        where: { rqi_id: rqiIds, rqi_fk_requisicao: id },
+        transaction: tx
+      });
+      const mapById = new Map(itensDb.map(i => [i.rqi_id, i]));
+
+      for (const dev of itens) {
+        const it = mapById.get(dev.rqi_id);
+        if (!it) throw new Error(`Item ${dev.rqi_id} não encontrado nesta requisição.`);
+
+        const material = await Material.findByPk(it.rqi_fk_material, { raw: true, transaction: tx });
+        if (!material) throw new Error(`Material ${it.rqi_fk_material} não encontrado para o item ${it.rqi_id}.`);
+        const tipo = await Tipo.findByPk(material.mat_fk_tipo, { raw: true, transaction: tx });
+
+        // ❌ Regras de negócio
+        if (String(material.mat_vendavel).toUpperCase() === "SIM") {
+          throw new Error(`Material vendável (${material.mat_nome}) não pode ser devolvido.`);
+        }
+        if (String(material.mat_consumivel).toLowerCase() === "sim") {
+          throw new Error(`Material consumível (${material.mat_nome}) não aceita devolução.`);
+        }
+
+        // ✅ Permissão por ITEM (categoria do item que está sendo devolvido)
+        if (!hasGlobal) {
+          const catId = Number(tipo?.tipo_fk_categoria) || null;
+          if (!catId || !allowed.has(catId)) {
+            throw new Error("Você não tem permissão para devolver itens desta categoria.");
           }
         }
-      },
-      async handler(ctx) {
-        const { id, itens } = ctx.params;
 
-        return await sequelize.transaction(async tx => {
-          const header = await this.adapter.model.findByPk(id, { transaction: tx });
-          if (!header) throw new Error("Requisição não encontrada.");
+        // … segue igual (entrada de stock, atualizar Material, RequisicaoItem, etc.)
+        const emUso = (it.rqi_qtd_atendida || 0) - (it.rqi_qtd_devolvida || 0);
+        if (dev.quantidade > emUso) {
+          throw new Error(`Quantidade de devolução (${dev.quantidade}) excede o em uso (${emUso}) no item ${it.rqi_id}.`);
+        }
 
-          const rqiIds = itens.map(i => i.rqi_id);
-          const itensDb = await RequisicaoItem.findAll({ where: { rqi_id: rqiIds, rqi_fk_requisicao: id }, transaction: tx });
-          const mapById = new Map(itensDb.map(i => [i.rqi_id, i]));
+        await Movimentacao.create({
+          mov_fk_material: material.mat_id,
+          mov_material_nome: material.mat_nome,
+          mov_tipo_nome: tipo ? tipo.tipo_nome : "",
+          mov_tipo: "entrada",
+          mov_quantidade: dev.quantidade,
+          mov_data: new Date(),
+          mov_descricao: `Devolução req ${header.req_codigo} (item ${it.rqi_id})`,
+          mov_preco: 0,
+          mov_fk_requisicao: id
+        }, { transaction: tx });
 
-          for (const dev of itens) {
-            const it = mapById.get(dev.rqi_id);
-            if (!it) throw new Error(`Item ${dev.rqi_id} não encontrado nesta requisição.`);
+        const estoqueNovo = Number(material.mat_quantidade_estoque) + Number(dev.quantidade);
+        await Material.update(
+          { mat_quantidade_estoque: estoqueNovo },
+          { where: { mat_id: material.mat_id }, transaction: tx }
+        );
 
-            const material = await Material.findByPk(it.rqi_fk_material, { raw: true, transaction: tx });
-            if (!material) throw new Error(`Material ${it.rqi_fk_material} não encontrado para o item ${it.rqi_id}.`);
-            const tipo = await Tipo.findByPk(material.mat_fk_tipo, { raw: true, transaction: tx });
+        const devolvidaNova = (it.rqi_qtd_devolvida || 0) + dev.quantidade;
+        const devolvidoFlag =
+          devolvidaNova === it.rqi_qtd_atendida ? "Sim" :
+          devolvidaNova > 0 ? "Parcial" : "Nao";
 
-            // BLOQUEIO: material vendável não pode ser devolvido
-            if (String(material.mat_vendavel).toUpperCase() === "SIM") {
-              throw new Error(`Material vendável (${material.mat_nome}) não pode ser devolvido.`);
-            }
+        const novoStatus =
+          devolvidaNova === it.rqi_qtd_atendida
+            ? "Devolvido"
+            : (it.rqi_qtd_atendida > 0 ? "Em Uso" : it.rqi_status);
 
-            // BLOQUEIO: consumível não aceita devolução
-            if (String(material.mat_consumivel).toLowerCase() === "sim") {
-              throw new Error(`Material consumível (${material.mat_nome}) não aceita devolução.`);
-            }
-
-            const emUso = (it.rqi_qtd_atendida || 0) - (it.rqi_qtd_devolvida || 0);
-            if (dev.quantidade > emUso) {
-              throw new Error(`Quantidade de devolução (${dev.quantidade}) excede o em uso (${emUso}) no item ${it.rqi_id}.`);
-            }
-
-            await Movimentacao.create({
-              mov_fk_material: material.mat_id,
-              mov_material_nome: material.mat_nome,
-              mov_tipo_nome: tipo ? tipo.tipo_nome : "",
-              mov_tipo: "entrada",
-              mov_quantidade: dev.quantidade,
-              mov_data: new Date(),
-              mov_descricao: `Devolução req ${header.req_codigo} (item ${it.rqi_id})`,
-              mov_preco: 0,
-              mov_fk_requisicao: id
-            }, { transaction: tx });
-
-            const estoqueNovo = Number(material.mat_quantidade_estoque) + Number(dev.quantidade);
-            await Material.update(
-              { mat_quantidade_estoque: estoqueNovo },
-              { where: { mat_id: material.mat_id }, transaction: tx }
-            );
-
-            const devolvidaNova = (it.rqi_qtd_devolvida || 0) + dev.quantidade;
-            const devolvidoFlag =
-              devolvidaNova === it.rqi_qtd_atendida ? "Sim" :
-              devolvidaNova > 0 ? "Parcial" : "Nao";
-
-            const novoStatus =
-              devolvidaNova === it.rqi_qtd_atendida
-                ? "Devolvido"
-                : (it.rqi_qtd_atendida > 0 ? "Em Uso" : it.rqi_status);
-
-            await RequisicaoItem.update(
-              {
-                rqi_qtd_devolvida: devolvidaNova,
-                rqi_devolvido: devolvidoFlag,
-                rqi_data_devolucao: new Date(),
-                rqi_condicao_retorno: dev.condicao || it.rqi_condicao_retorno,
-                rqi_obs_devolucao: dev.obs || it.rqi_obs_devolucao,
-                rqi_status: novoStatus
-              },
-              { where: { rqi_id: it.rqi_id }, transaction: tx }
-            );
-          }
-
-          await this._recomputeHeaderStatus(id, tx);
-          await this.clearCache();
-          return { success: true, message: "Devolução registrada com sucesso." };
-        });
+        await RequisicaoItem.update(
+          {
+            rqi_qtd_devolvida: devolvidaNova,
+            rqi_devolvido: devolvidoFlag,
+            rqi_data_devolucao: new Date(),
+            rqi_condicao_retorno: dev.condicao || it.rqi_condicao_retorno,
+            rqi_obs_devolucao: dev.obs || it.rqi_obs_devolucao,
+            rqi_status: novoStatus
+          },
+          { where: { rqi_id: it.rqi_id }, transaction: tx }
+        );
       }
-    },
+
+      await this._recomputeHeaderStatus(id, tx);
+      await this.clearCache();
+      return { success: true, message: "Devolução registrada com sucesso." };
+    });
+  }
+},
 
     /**
      * POST /requisicoes/:id/decidir
-     * Body: { tipo: "Aprovar"|"Rejeitar"|"Cancelar", motivo?: string }
      */
     decidir: {
       rest: "POST /requisicoes/:id/decidir",
@@ -590,6 +663,19 @@ module.exports = {
       const hasGlobal = (Array.isArray(tpls) ? tpls : [])
         .some(t => t.template_code === "manage_category" && (t.resource_id == null));
       return { allowed, hasGlobal };
+    },
+
+    _hasSalesPermission(ctx) {
+      const u = ctx?.meta?.user || {};
+      const perms = Array.isArray(u.permissoes) ? u.permissoes : [];
+      const tpls  = Array.isArray(u.templates) ? u.templates : [];
+      const viaPerms = perms.some(p =>
+        typeof p === "string"
+          ? p === "manage_sales"
+          : p?.acao === "manage_sales" || p?.permissao === "manage_sales" || p?.code === "manage_sales"
+      );
+      const viaTpls = tpls.some(t => t?.template_code === "manage_sales");
+      return viaPerms || viaTpls;
     },
 
     async _recomputeHeaderStatus(reqId, tx) {
